@@ -1,6 +1,7 @@
 import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
+import pybullet as p
 
 from track import make_track, nearest_index, lookahead_point
 from pure_pursuit import steering_angle
@@ -67,5 +68,12 @@ class CarSpeedEnv(gym.Env):
         terminated = False
         truncated = self.steps >= self.max_steps
         return self.obs(speed), reward, terminated, truncated, {"speed" : speed}
+    
+    def close(self):
+        try:
+            p.disconnect(self.sim.client)
+        except Exception:
+            pass
+
 
 
