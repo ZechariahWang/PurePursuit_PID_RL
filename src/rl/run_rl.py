@@ -1,12 +1,14 @@
 import os, sys, time
 import numpy as np
 import pybullet as p
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from stable_baselines3 import SAC
 from car_env import CarSpeedEnv
 
 TARGET_SPEED=2
+
+# to open logs, tensorboard --logdir tb
 
 def main():
     env = CarSpeedEnv(gui=True, target_speed_range=(TARGET_SPEED, TARGET_SPEED))
@@ -15,7 +17,7 @@ def main():
     t = env.track
     for i in range(len(t)):
         a, b = t[i], t[(i+1) % len(t)] 
-        p.addUserDebugLine([a[0], a[1], 0.005], [b[0], b[1], 0.05], [1,0,0], 2)
+        p.addUserDebugLine([a[0], a[1], 0.05], [b[0], b[1], 0.05], [1,0,0], 2) # line start pos, line end pos, color (rgb normalized), lind size
 
     obs, _ = env.reset()
     try:
@@ -28,7 +30,7 @@ def main():
             pos, *_ = env.sim.observe()
             cam = p.getDebugVisualizerCamera()
 
-            p.resetDebugVisualizerCamera(cam[10], cam[8], cam[9], [pos[0, pos[1], 0]])
+            p.resetDebugVisualizerCamera(cam[10], cam[8], cam[9], [pos[0], pos[1], 0]) # distance, yaw angle, pitch angle, target pos
             time.sleep(env.sim.dt)
     except KeyboardInterrupt:
         pass

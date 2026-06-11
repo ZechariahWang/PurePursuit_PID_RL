@@ -37,7 +37,7 @@ class CarSpeedEnv(gym.Env):
         super().reset(seed=seed)
         start = self.track[0]
         heading = np.arctan2(self.track[1, 1] - self.track[0, 1], self.track[1,0] - self.track[0,0])
-        self.sim_reset(pose=(start[0], start[1], heading))
+        self.sim.reset(pose=(start[0], start[1], heading))
 
         self.target_speed = float(self.np_random.uniform(*self.target_speed_range))
         self.prev_throttle = 0
