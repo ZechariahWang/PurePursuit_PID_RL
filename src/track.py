@@ -1,5 +1,20 @@
 import numpy as np 
 
+def cumulative_arc_length(pts):
+    seg = np.linalg.norm(np.diff(pts, axis=0), axis=1)
+    return np.concatenate([[0,0], np.cumsum(seg)])
+
+def track_heading(points, index):
+    j = (index + 1) % len(points)
+    d = points[j] - points[index]
+    return np.arctan2(d[1], d[0])
+
+def cross_track_error(points, pos, index):
+    th = track_heading(points, index)
+    dx = pos[0] - points[index][0]
+    dy = pos[1] - points[index][1]
+    return -np.sin(th) * dx + np.cos(th) * dy  # signed lateral offset from the line
+
 # make the cubic bezier curve
 def cubic_bezier(P0, P1, P2, P3, n):
     t = np.linspace(0, 1, n, endpoint=False)[:, None]  # (n,1) so it broadcasts over x,y
