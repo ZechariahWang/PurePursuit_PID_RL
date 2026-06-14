@@ -39,6 +39,7 @@ class CarSpeedEnv(gym.Env):
         self.prev_throttle = 0.0
         self.prev_steer = 0.0
         self.prev_idx = 0
+        self.progress = 0.0
         self.steps = 0
 
     def obs(self):
@@ -62,21 +63,22 @@ class CarSpeedEnv(gym.Env):
             offset = self.np_random.uniform(-1.0, 1.0)
             positions.append((self.track[i][0] + nx * offset, self.track[i][1] + ny * offset))
         return positions
-    
+
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
         start = self.track[0]
         heading = np.arctan2(self.track[1, 1] - self.track[0, 1], self.track[1, 0] - self.track[0, 0])
         self.sim.reset(pose=(start[0], start[1], heading))
-        self.sim.spawn_obstacles(self._sample_obstacles())
+        self.sim.create_obstacles(self.sample_obstacles())
 
         self.prev_throttle = 0.0
         self.prev_steer = 0.0
+        self.progress = 0.0
         self.steps = 0
         observation, idx, _ = self.obs()
         self.prev_idx = idx
         return observation, {}
-    
+
     def step(self, action):
         throttle = float(np.clip(action[0], -1, 1))
         steer = float(np.clip(action[1], -1, 1)) * MAX_STEER
@@ -91,14 +93,16 @@ class CarSpeedEnv(gym.Env):
         elif ds > self.total_len / 2: # wrapped backward
             ds -= self.total_len
         self.prev_idx = idx
+        self.progress += ds
 
         jerk = abs(throttle - self.prev_throttle) + abs(steer - self.prev_steer)
         reward = self.progress_weight * ds - self.time_penalty - self.jerk_penalty * jerk
         self.prev_throttle = throttle
         self.prev_steer = steer
 
+        collided = self.sim.check_collision()
         terminated = False
-        if self.sim.check_collision():
+        if collided:
             reward -= self.collision_penalty
             terminated = True
         elif abs(cte) > CTE_MAX:
@@ -107,12 +111,11 @@ class CarSpeedEnv(gym.Env):
 
         truncated = self.steps >= self.max_steps
         _, _, speed = self.sim.observe()
-        return observation, reward, terminated, truncated, {"speed": speed}
+        return observation, reward, terminated, truncated, {
+            "speed": speed, "progress": self.progress, "collision": collided}
 
     def close(self):
         try:
             p.disconnect(self.sim.client)
         except Exception:
             pass
-
-    

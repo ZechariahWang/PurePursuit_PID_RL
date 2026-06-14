@@ -1,8 +1,8 @@
 import numpy as np 
 
-def cumulative_arc_length(pts):
+def cumulative_arclength(pts):
     seg = np.linalg.norm(np.diff(pts, axis=0), axis=1)
-    return np.concatenate([[0,0], np.cumsum(seg)])
+    return np.concatenate([[0.0], np.cumsum(seg)])  # length N, distance at each point
 
 def track_heading(points, index):
     j = (index + 1) % len(points)

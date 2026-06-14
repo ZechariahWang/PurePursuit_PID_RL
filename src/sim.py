@@ -45,8 +45,8 @@ class CarSim:
                 return True
         return False
     
-    # lidar stuff
-    def raycast(self, num_rays=16, fov=np.pi, max_range=10, z=0.2, forward=0.25):
+    # lidar stuff. forward must clear the chassis (~0.4m) or rays self-hit the car
+    def raycast(self, num_rays=16, fov=np.pi, max_range=10, z=0.2, forward=0.4):
         pos, yaw, _ = self.observe() # current pos
 
         # raycasts come slightly from in front of the robot
@@ -59,10 +59,26 @@ class CarSim:
 
         # from = positions where ray starts, tos = where ray ends
         froms = [origin] * num_rays
-        tos = [[origin_x + max_range * np.cos(angle), origin_y, + max_range * np.sin(angle), z] for angle in angles]
+        tos = [[origin_x + max_range * np.cos(angle), origin_y + max_range * np.sin(angle), z] for angle in angles]
         results = p.rayTestBatch(froms, tos) # returns collision info
-        return np.array([result[2] for result in results], dtype=np.float32) # hit fraction, 1 = clear
-    
+        # treat rays that hit the car itself as clear (1.0); else report hit fraction, 1 = clear
+        return np.array([1.0 if r[0] == self.car else r[2] for r in results], dtype=np.float32)
+
+    # same rays as raycast() but also returns the start/hit points so run_rl can draw them
+    def raycast_points(self, num_rays=16, fov=np.pi, max_range=10, z=0.2, forward=0.4):
+        pos, yaw, _ = self.observe()
+        origin_x = pos[0] + forward * np.cos(yaw)
+        origin_y = pos[1] + forward * np.sin(yaw)
+        origin = [origin_x, origin_y, z]
+
+        angles = yaw + np.linspace(-fov / 2, fov / 2, num_rays)
+        froms = [origin] * num_rays
+        tos = [[origin_x + max_range * np.cos(angle), origin_y + max_range * np.sin(angle), z] for angle in angles]
+        fracs = np.array([1.0 if r[0] == self.car else r[2] for r in p.rayTestBatch(froms, tos)], dtype=np.float32)
+        hits = [[origin_x + f * max_range * np.cos(a), origin_y + f * max_range * np.sin(a), z]
+                for f, a in zip(fracs, angles)]
+        return froms, hits, fracs
+
 
     def reset(self, pose=(0,0,0)):
         self.clear_obstacles()
