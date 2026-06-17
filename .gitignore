@@ -1,0 +1,11 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Training artifacts (regenerated every run — not worth versioning)
+tb/
+checkpoints/
+
+# Keep curated models in models/archive/ (tracked), ignore stray test dirs
+**/_smoke_ckpt/

@@ -2,6 +2,7 @@ import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
 import pybullet as p
+from collections import deque
 
 from sim import CarSim
 
@@ -18,7 +19,8 @@ class GoalNavEnv(gym.Env):
                  progress_weight=5.0, reach_bonus=50.0,
                  collision_penalty=15.0, oob_penalty=10.0,
                  time_penalty=0.02, jerk_penalty=0.0,
-                 clearance_penalty=0.3, clearance_thresh=0.2):
+                 clearance_penalty=0.3, clearance_thresh=0.2,
+                 frame_stack=4):
         super().__init__()
 
         self.sim = CarSim(gui=gui, dt=dt)
@@ -42,9 +44,15 @@ class GoalNavEnv(gym.Env):
         self.bound_margin = 10.0 # give up past this distance
 
         self.action_space = spaces.Box(-1, 1, shape=(2,), dtype=np.float32)  # [throttle, steer]
-        # obs = [speed, dist_to_goal, sin(bearing), cos(bearing)] + lidar rays
-        low  = np.array([-2, 0, -1, -1] + [0.0] * NUM_RAYS, dtype=np.float32)
-        high = np.array([ 2, 2,  1,  1] + [1.0] * NUM_RAYS, dtype=np.float32)
+        # single frame = [speed, dist_to_goal, sin(bearing), cos(bearing)] + lidar rays
+        single_low  = np.array([-2, 0, -1, -1] + [0.0] * NUM_RAYS, dtype=np.float32)
+        single_high = np.array([ 2, 2,  1,  1] + [1.0] * NUM_RAYS, dtype=np.float32)
+        # stack the last `frame_stack` frames so the policy has short-term memory
+        # (lets it notice it's stuck/oscillating instead of jittering in place)
+        self.frame_stack = frame_stack
+        self.frames = deque(maxlen=frame_stack)
+        low  = np.tile(single_low, frame_stack)
+        high = np.tile(single_high, frame_stack)
         self.observation_space = spaces.Box(low=low, high=high, dtype=np.float32)
 
         self.goal = self.start.copy()
@@ -91,6 +99,9 @@ class GoalNavEnv(gym.Env):
                          np.sin(bearing), np.cos(bearing)], dtype=np.float32)
         return np.concatenate([head, rays]).astype(np.float32), dist
 
+    def stacked(self):
+        return np.concatenate(list(self.frames)).astype(np.float32)
+
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
         if self.obstacle_range is not None:   # randomize difficulty so easy + hard layouts are always seen
@@ -106,10 +117,13 @@ class GoalNavEnv(gym.Env):
         self.prev_throttle = 0.0
         self.prev_steer = 0.0
         self.steps = 0
-        observation, dist = self.obs()
+        frame, dist = self.obs()
+        self.frames.clear()
+        for _ in range(self.frame_stack):   # fill the stack with the initial frame
+            self.frames.append(frame)
         self.prev_dist = dist
         self.init_dist = dist
-        return observation, {}
+        return self.stacked(), {}
 
     def step(self, action):
         throttle = float(np.clip(action[0], -1, 1))
@@ -117,15 +131,17 @@ class GoalNavEnv(gym.Env):
         self.sim.apply(steer, throttle)
         self.steps += 1
 
-        observation, dist = self.obs()
+        frame, dist = self.obs()
+        self.frames.append(frame)
 
         # reward closing distance to the goal
         reward = self.progress_weight * (self.prev_dist - dist) - self.time_penalty
         jerk = abs(throttle - self.prev_throttle) + abs(steer - self.prev_steer)
         reward -= self.jerk_penalty * jerk
         # continuous clearance penalty: discourage getting close to obstacles so it
-        # detours early instead of nosing in and oscillating (rays: 1=clear, low=close)
-        min_ray = float(observation[4:].min())
+        # detours early instead of nosing in and oscillating (rays: 1=clear, low=close).
+        # use the current frame's rays, not the stacked obs.
+        min_ray = float(frame[4:].min())
         reward -= self.clearance_penalty * max(0.0, self.clearance_thresh - min_ray)
         self.prev_dist = dist
         self.prev_throttle = throttle
@@ -147,7 +163,7 @@ class GoalNavEnv(gym.Env):
             terminated = True
 
         truncated = self.steps >= self.max_steps
-        return observation, reward, terminated, truncated, info
+        return self.stacked(), reward, terminated, truncated, info
 
     def close(self):
         try:

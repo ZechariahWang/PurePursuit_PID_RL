@@ -1,4 +1,5 @@
-import os, sys
+import os, sys, shutil
+from datetime import datetime
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from stable_baselines3 import SAC
@@ -57,7 +58,13 @@ def main():
 
     model.save("sac_goal_nav")
     env.close()
-    print("model saved -> sac_goal_nav.zip")
+
+    # archive a timestamped copy so retraining never overwrites old models
+    os.makedirs("models/archive", exist_ok=True)
+    stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+    archive_path = os.path.join("models/archive", f"{stamp}_sac_goal_nav.zip")
+    shutil.copy("sac_goal_nav.zip", archive_path)
+    print(f"model saved -> sac_goal_nav.zip  (archived -> {archive_path})")
 
 if __name__ == "__main__":
     main()
