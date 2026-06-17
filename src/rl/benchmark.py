@@ -17,11 +17,6 @@ def rl_controller(model):
     return act
 
 def baseline_controller():
-    """Pure pursuit aimed straight at the goal + PID throttle.
-
-    Purely geometric: it steers at the target and has no idea obstacles exist,
-    so it serves as the 'no avoidance' reference the RL policy is compared to.
-    """
     pid = PID(kp=0.5, ki=0.1, kd=0.0)
     def act(env, obs):
         pos, yaw, speed = env.sim.observe()
@@ -62,7 +57,7 @@ def summarize(name, st):
     print(f"  mean steps    : {np.mean(st['steps']):6.0f}")
 
 def main():
-    env = GoalNavEnv(gui=False)
+    env = GoalNavEnv(gui=True)
     model = SAC.load("sac_goal_nav")
 
     rl_act = rl_controller(model)

@@ -10,51 +10,50 @@ from rl.environments.goal_nav_env import GoalNavEnv
 SEED = 0
 MAX_STEPS = 1000
 
-# curriculum: (n_obstacles, timesteps). Learn to drive to the goal in an empty
-# world first, then progressively add obstacles to the same model.
-STAGES = [
-    (0, 100_000),
-    (3, 100_000),
-    (5, 100_000),
-]
+# Remove-Item -Recurse -Force .\checkpoints -ErrorAction SilentlyContinue
+# Remove-Item -Force .\sac_goal_nav*.zip -ErrorAction SilentlyContinue
 
-def make_env(n_obstacles, seed):
-    env = Monitor(GoalNavEnv(gui=False, max_steps=MAX_STEPS, n_obstacles=n_obstacles))
+WARMUP_STEPS   = 50_000
+MAIN_STEPS     = 250_000
+OBSTACLE_RANGE = (1, 5) # amount that could spawn
+
+def make_env(seed, n_obstacles=0, obstacle_range=None):
+    env = Monitor(GoalNavEnv(gui=False, max_steps=MAX_STEPS,
+                             n_obstacles=n_obstacles, obstacle_range=obstacle_range))
     env.reset(seed=seed)
     return env
 
 def main():
     set_random_seed(SEED)
 
-    first_n, _ = STAGES[0]
-    env = make_env(first_n, SEED)
-    model = SAC("MlpPolicy", env, learning_rate=3e-4, buffer_size=100000, batch_size=64,
+    env = make_env(SEED, n_obstacles=0)
+    model = SAC("MlpPolicy", env, learning_rate=3e-4, buffer_size=100000, batch_size=256,
                 gamma=0.99, tau=0.005, verbose=1, tensorboard_log="./tb", seed=SEED)
 
-    for i, (n_obstacles, steps) in enumerate(STAGES):
-        print(f"\n=== stage {i}: n_obstacles={n_obstacles}, {steps} steps ===")
-        if i > 0:
-            new_env = make_env(n_obstacles, SEED + i)   # swap difficulty, keep the model + replay buffer
-            model.set_env(new_env)
-            env.close()
-            env = new_env
+    # phase 1: empty-world, just wanna try and get to the goal
+    print(f"\n=== warmup: no obstacles, {WARMUP_STEPS} steps ===")
+    eval_env = make_env(SEED + 1000, n_obstacles=0)
+    model.learn(total_timesteps=WARMUP_STEPS, progress_bar=True, tb_log_name="SAC_curriculum",
+                callback=[CheckpointCallback(save_freq=25000, save_path="./checkpoints", name_prefix="sac_goal_nav_warmup"),
+                          EvalCallback(eval_env, best_model_save_path="./checkpoints/best/warmup",
+                                       log_path="./checkpoints/eval/warmup", eval_freq=25000,
+                                       n_eval_episodes=5, deterministic=True)])
+    eval_env.close()
 
-        # eval at this stage's difficulty so success numbers reflect the task it's on
-        eval_env = make_env(n_obstacles, SEED + 1000 + i)
-        tag = f"stage{i}_obs{n_obstacles}"
-        checkpoint_cb = CheckpointCallback(save_freq=25000, save_path="./checkpoints",
-                                           name_prefix=f"sac_goal_nav_{tag}")
-        eval_cb = EvalCallback(eval_env, best_model_save_path=f"./checkpoints/best/{tag}",
-                               log_path=f"./checkpoints/eval/{tag}", eval_freq=25000,
-                               n_eval_episodes=5, deterministic=True)
-
-        # reset_num_timesteps only on the first stage so the timestep counter and
-        # tensorboard run continue unbroken across the whole curriculum
-        model.learn(total_timesteps=steps, progress_bar=True,
-                    callback=[checkpoint_cb, eval_cb],
-                    reset_num_timesteps=(i == 0), tb_log_name="SAC_curriculum")
-        model.save(f"sac_goal_nav_{tag}")
-        eval_env.close()
+    # phase 2: randomized obstacle count
+    print(f"\n=== main: obstacles randomized in {OBSTACLE_RANGE}, {MAIN_STEPS} steps ===")
+    main_env = make_env(SEED + 1, obstacle_range=OBSTACLE_RANGE)
+    model.set_env(main_env)
+    env.close()
+    env = main_env
+    eval_env = make_env(SEED + 1001, obstacle_range=OBSTACLE_RANGE)
+    model.learn(total_timesteps=MAIN_STEPS, progress_bar=True, reset_num_timesteps=False,
+                tb_log_name="SAC_curriculum",
+                callback=[CheckpointCallback(save_freq=25000, save_path="./checkpoints", name_prefix="sac_goal_nav_main"),
+                          EvalCallback(eval_env, best_model_save_path="./checkpoints/best/main",
+                                       log_path="./checkpoints/eval/main", eval_freq=25000,
+                                       n_eval_episodes=10, deterministic=True)])
+    eval_env.close()
 
     model.save("sac_goal_nav")
     env.close()

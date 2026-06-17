@@ -6,7 +6,7 @@ import pybullet as p
 from sim import CarSim
 
 MAX_STEER    = 0.6
-NUM_RAYS     = 8
+NUM_RAYS     = 16
 LIDAR_RANGE  = 10.0
 
 class GoalNavEnv(gym.Env):
@@ -14,10 +14,11 @@ class GoalNavEnv(gym.Env):
 
     def __init__(self, gui=False, dt=1/60, max_steps=1500,
                  goal_dist_range=(8.0, 14.0), goal_radius=1.0,
-                 n_obstacles=5, obstacle_spread=2.0,
+                 n_obstacles=5, obstacle_range=None, obstacle_spread=2.0,
                  progress_weight=5.0, reach_bonus=50.0,
-                 collision_penalty=10.0, oob_penalty=10.0,
-                 time_penalty=0.02, jerk_penalty=0.0):
+                 collision_penalty=15.0, oob_penalty=10.0,
+                 time_penalty=0.02, jerk_penalty=0.0,
+                 clearance_penalty=0.3, clearance_thresh=0.2):
         super().__init__()
 
         self.sim = CarSim(gui=gui, dt=dt)
@@ -26,6 +27,7 @@ class GoalNavEnv(gym.Env):
         self.goal_dist_range = goal_dist_range
         self.goal_radius = goal_radius
         self.n_obstacles = n_obstacles
+        self.obstacle_range = obstacle_range  # if set (lo, hi), sample count each reset
         self.obstacle_spread = obstacle_spread
         self.progress_weight = progress_weight
         self.reach_bonus = reach_bonus
@@ -33,6 +35,8 @@ class GoalNavEnv(gym.Env):
         self.oob_penalty = oob_penalty
         self.time_penalty = time_penalty
         self.jerk_penalty = jerk_penalty
+        self.clearance_penalty = clearance_penalty   # nudge away from obstacles before contact
+        self.clearance_thresh = clearance_thresh     # in ray-fraction units (0.2 -> within 20% of lidar range)
         self.speed_scale = 10.0
         self.dist_scale = 15.0
         self.bound_margin = 10.0 # give up past this distance
@@ -89,6 +93,9 @@ class GoalNavEnv(gym.Env):
 
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
+        if self.obstacle_range is not None:   # randomize difficulty so easy + hard layouts are always seen
+            lo, hi = self.obstacle_range
+            self.n_obstacles = int(self.np_random.integers(lo, hi + 1))
         self.goal, goal_ang = self.sample_goal()
 
         # start roughly facing the goal 
@@ -116,6 +123,10 @@ class GoalNavEnv(gym.Env):
         reward = self.progress_weight * (self.prev_dist - dist) - self.time_penalty
         jerk = abs(throttle - self.prev_throttle) + abs(steer - self.prev_steer)
         reward -= self.jerk_penalty * jerk
+        # continuous clearance penalty: discourage getting close to obstacles so it
+        # detours early instead of nosing in and oscillating (rays: 1=clear, low=close)
+        min_ray = float(observation[4:].min())
+        reward -= self.clearance_penalty * max(0.0, self.clearance_thresh - min_ray)
         self.prev_dist = dist
         self.prev_throttle = throttle
         self.prev_steer = steer
