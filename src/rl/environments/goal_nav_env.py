@@ -15,12 +15,12 @@ class GoalNavEnv(gym.Env):
 
     def __init__(self, gui=False, dt=1/60, max_steps=1500,
                  goal_dist_range=(8.0, 14.0), goal_radius=1.0,
-                 n_obstacles=5, obstacle_range=None, obstacle_spread=2.0,
+                 n_obstacles=5, obstacle_range=None, obstacle_spread=4.0, obstacle_min_gap=1.8,
                  progress_weight=5.0, reach_bonus=50.0,
                  collision_penalty=15.0, oob_penalty=10.0,
-                 time_penalty=0.02, jerk_penalty=0.0,
+                 time_penalty=0.02, jerk_penalty=0.01,
                  clearance_penalty=0.3, clearance_thresh=0.2,
-                 frame_stack=4):
+                 frame_stack=4, warmup_steps=20):
         super().__init__()
 
         self.sim = CarSim(gui=gui, dt=dt)
@@ -31,14 +31,15 @@ class GoalNavEnv(gym.Env):
         self.n_obstacles = n_obstacles
         self.obstacle_range = obstacle_range  # if set (lo, hi), sample count each reset
         self.obstacle_spread = obstacle_spread
+        self.obstacle_min_gap = obstacle_min_gap  # min spacing so gaps stay passable (no impossible walls)
         self.progress_weight = progress_weight
         self.reach_bonus = reach_bonus
         self.collision_penalty = collision_penalty
         self.oob_penalty = oob_penalty
         self.time_penalty = time_penalty
         self.jerk_penalty = jerk_penalty
-        self.clearance_penalty = clearance_penalty   # nudge away from obstacles before contact
-        self.clearance_thresh = clearance_thresh     # in ray-fraction units (0.2 -> within 20% of lidar range)
+        self.clearance_penalty = clearance_penalty # nudge away from obstacles before contact
+        self.clearance_thresh = clearance_thresh # in ray-fraction units 
         self.speed_scale = 10.0
         self.dist_scale = 15.0
         self.bound_margin = 10.0 # give up past this distance
@@ -47,12 +48,13 @@ class GoalNavEnv(gym.Env):
         # single frame = [speed, dist_to_goal, sin(bearing), cos(bearing)] + lidar rays
         single_low  = np.array([-2, 0, -1, -1] + [0.0] * NUM_RAYS, dtype=np.float32)
         single_high = np.array([ 2, 2,  1,  1] + [1.0] * NUM_RAYS, dtype=np.float32)
-        # stack the last `frame_stack` frames so the policy has short-term memory
-        # (lets it notice it's stuck/oscillating instead of jittering in place)
+
         self.frame_stack = frame_stack
+        self.warmup_steps = warmup_steps   # roll forward at reset so it doesn't launch from a dead stop
         self.frames = deque(maxlen=frame_stack)
         low  = np.tile(single_low, frame_stack)
         high = np.tile(single_high, frame_stack)
+
         self.observation_space = spaces.Box(low=low, high=high, dtype=np.float32)
 
         self.goal = self.start.copy()
@@ -73,14 +75,18 @@ class GoalNavEnv(gym.Env):
         seg = goal - self.start
         perp = np.array([-seg[1], seg[0]]) / (np.linalg.norm(seg) + 1e-9)
         positions, tries = [], 0
-        while len(positions) < self.n_obstacles and tries < 100:
+        while len(positions) < self.n_obstacles and tries < 200:
             tries += 1
-            t = self.np_random.uniform(0.35, 0.85)  # leave clear runway so it learns to drive first
+            t = self.np_random.uniform(0.35, 0.9)  # make not a blob 
             off = self.np_random.uniform(-self.obstacle_spread, self.obstacle_spread)
             pt = self.start + t * seg + perp * off
-            if np.linalg.norm(pt - self.start) < 2.0: # dont spawn blocks on starting loc
+            if np.linalg.norm(pt - self.start) < 3.5: # no obstacle close to start
                 continue
-            if np.linalg.norm(pt - goal) < self.goal_radius + 1.0: # keep goal 
+            if np.linalg.norm(pt - goal) < self.goal_radius + 1.0: # keep goal reachable
+                continue
+
+            # make it so its def possible to pass through gaps in obstacles
+            if any(np.linalg.norm(pt - np.array(q)) < self.obstacle_min_gap for q in positions):
                 continue
             positions.append((pt[0], pt[1]))
         return positions
@@ -89,6 +95,7 @@ class GoalNavEnv(gym.Env):
         pos, yaw, speed = self.sim.observe()
         dx, dy = self.goal[0] - pos[0], self.goal[1] - pos[1]
         dist = float(np.hypot(dx, dy))
+
         # rotate the goal vector into the car's body frame -> bearing relative to heading
         local_x =  np.cos(yaw) * dx + np.sin(yaw) * dy
         local_y = -np.sin(yaw) * dx + np.cos(yaw) * dy
@@ -104,7 +111,7 @@ class GoalNavEnv(gym.Env):
 
     def reset(self, *, seed=None, options=None):
         super().reset(seed=seed)
-        if self.obstacle_range is not None:   # randomize difficulty so easy + hard layouts are always seen
+        if self.obstacle_range is not None: # randomize difficulty so easy + hard layouts are always seen
             lo, hi = self.obstacle_range
             self.n_obstacles = int(self.np_random.integers(lo, hi + 1))
         self.goal, goal_ang = self.sample_goal()
@@ -114,12 +121,17 @@ class GoalNavEnv(gym.Env):
         self.sim.reset(pose=(self.start[0], self.start[1], heading))
         self.sim.create_obstacles(self.sample_obstacles(self.goal))
 
-        self.prev_throttle = 0.0
+        # roll forward a moment so the episode starts in motion: a stationary spawn
+        # is an out-of-distribution state that makes the policy reflexively reverse
+        for _ in range(self.warmup_steps):
+            self.sim.apply(0.0, 1.0)
+
+        self.prev_throttle = 1.0   # match the warmup so the first step isn't a big jerk
         self.prev_steer = 0.0
         self.steps = 0
         frame, dist = self.obs()
         self.frames.clear()
-        for _ in range(self.frame_stack):   # fill the stack with the initial frame
+        for _ in range(self.frame_stack): # fill the stack with the initial frame
             self.frames.append(frame)
         self.prev_dist = dist
         self.init_dist = dist
@@ -138,9 +150,8 @@ class GoalNavEnv(gym.Env):
         reward = self.progress_weight * (self.prev_dist - dist) - self.time_penalty
         jerk = abs(throttle - self.prev_throttle) + abs(steer - self.prev_steer)
         reward -= self.jerk_penalty * jerk
-        # continuous clearance penalty: discourage getting close to obstacles so it
-        # detours early instead of nosing in and oscillating (rays: 1=clear, low=close).
-        # use the current frame's rays, not the stacked obs.
+
+        # discourage getting close to obstacles 
         min_ray = float(frame[4:].min())
         reward -= self.clearance_penalty * max(0.0, self.clearance_thresh - min_ray)
         self.prev_dist = dist

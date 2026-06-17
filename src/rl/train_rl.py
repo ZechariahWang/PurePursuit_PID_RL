@@ -15,8 +15,8 @@ MAX_STEPS = 1000
 # Remove-Item -Force .\sac_goal_nav*.zip -ErrorAction SilentlyContinue
 
 WARMUP_STEPS   = 50_000
-MAIN_STEPS     = 250_000
-OBSTACLE_RANGE = (1, 5) # amount that could spawn
+MAIN_STEPS     = 350_000
+OBSTACLE_RANGE = (3, 7) 
 
 def make_env(seed, n_obstacles=0, obstacle_range=None):
     env = Monitor(GoalNavEnv(gui=False, max_steps=MAX_STEPS,
@@ -55,16 +55,23 @@ def main():
                                        log_path="./checkpoints/eval/main", eval_freq=25000,
                                        n_eval_episodes=10, deterministic=True)])
     eval_env.close()
-
-    model.save("sac_goal_nav")
     env.close()
 
-    # archive a timestamped copy so retraining never overwrites old models
+    # use the best eval checkpoint, not the final model
+    best = "./checkpoints/best/main/best_model.zip"
+    if os.path.exists(best):
+        shutil.copy(best, "sac_goal_nav.zip")
+        print(f"saved best eval model at sac_goal_nav.zip  (from {best})")
+    else:
+        model.save("sac_goal_nav")
+        print("no best checkpoint found; saved final model at sac_goal_nav.zip")
+
+    # archive copy of model
     os.makedirs("models/archive", exist_ok=True)
     stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
     archive_path = os.path.join("models/archive", f"{stamp}_sac_goal_nav.zip")
     shutil.copy("sac_goal_nav.zip", archive_path)
-    print(f"model saved -> sac_goal_nav.zip  (archived -> {archive_path})")
+    print(f"archived -> {archive_path}")
 
 if __name__ == "__main__":
     main()
