@@ -12,7 +12,7 @@ from rl.environments.car_env import CarSpeedEnv as ThrottleEnv
 MODE               = "goal" # goal, nav, throttle
 TARGET_SPEED       = 2.0    # only used by throttle
 
-# to open logs, tensorboard --logdir tb
+# tensorboard --logdir tb
 
 def draw_goal(env, ids):
     gx, gy = env.goal

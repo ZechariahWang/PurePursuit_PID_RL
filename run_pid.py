@@ -22,6 +22,7 @@ def draw_track(track):
     for k in range(n):
         a, b = track[k], track[(k + 1) % n]
         p.addUserDebugLine([a[0], a[1], 0.05], [b[0], b[1], 0.05], lineColorRGB=[1, 0, 0], lineWidth=2)
+        
 def main():
     track = make_track(WAYPOINTS, samples_per_seg=200)
     start = track[0]

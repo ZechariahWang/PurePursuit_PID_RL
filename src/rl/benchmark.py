@@ -10,6 +10,8 @@ from pid import PID
 TARGET_SPEED = 3.0
 N_EPISODES = 30
 
+# tensorboard --logdir tb
+
 def rl_controller(model):
     def act(env, obs):
         action, _ = model.predict(obs, deterministic=True)

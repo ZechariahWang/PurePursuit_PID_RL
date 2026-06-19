@@ -121,8 +121,6 @@ class GoalNavEnv(gym.Env):
         self.sim.reset(pose=(self.start[0], self.start[1], heading))
         self.sim.create_obstacles(self.sample_obstacles(self.goal))
 
-        # roll forward a moment so the episode starts in motion: a stationary spawn
-        # is an out-of-distribution state that makes the policy reflexively reverse
         for _ in range(self.warmup_steps):
             self.sim.apply(0.0, 1.0)
 
